@@ -14,6 +14,7 @@ const STAR_URL = 'https://www.pixiv.net/bookmark.php?rest=show&order=desc'
 const IMG_URL = 'https://www.pixiv.net/member_illust.php?mode=medium&illust_id='
 const MANAGE_URL = 'https://www.pixiv.net/member_illust.php?mode=manga_big&illust_id='
 const AUTHOR_URL = 'https://www.pixiv.net/member_illust.php?id='
+const FOLLOW_URL = 'https://www.pixiv.net/bookmark.php?type=user&rest=show&p='
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36'
 
 class Pixiv {
@@ -96,6 +97,47 @@ class Pixiv {
     }
   }
 
+  // 获取画师列表
+  async getAuthorList (url) {
+    try {
+      const res = await axios({
+        method: 'get',
+        url: url,
+        headers: {
+          'User-Agent': USER_AGENT,
+          'Referer': 'https://www.pixiv.net',
+          'Cookie': this.cookie
+        }
+      })
+      const $ = cheerio.load(res.data)
+      const members = $('.members').find('li')
+      let authorList = []
+      members.each(function () {
+        const author = $(this).find('input').val()
+        authorList.push(author)
+      })
+      return authorList
+    } catch (err) {
+      console.log(err)
+    }
+  }
+
+  // 按画师下载
+  async downloadByAuthor (author) {
+    try {
+      const defaultUrl = `${AUTHOR_URL}${author}&type=all`
+      const pageSize = await this.getPageSize(defaultUrl)
+      for (let i = 1; i <= pageSize; i++) {
+        console.log(`--------开始下载第${i}页--------`)
+        const url = `${defaultUrl}&p=${i}`
+        const imgList = await this.getImgList(url)
+        await Promise.map(imgList, (img) => this.download(img), { concurrency: 5 })
+      }
+    } catch (err) {
+      console.log(err)
+    }
+  }
+
   // 获取单页收藏夹
   async getImgList (url) {
     try {
@@ -113,7 +155,7 @@ class Pixiv {
       const imgList = []
       // 如果是下载作者列表，那么不需要每次都去获取作者，而且也获取不到
       let author
-      if (this.mode === 'author') {
+      if (this.mode !== 'star') {
         author = $('.user-name').text()
       }
       list.each(function () {
@@ -164,7 +206,6 @@ class Pixiv {
         // 是图集，获取所有图片链接
         const more = readMore.text() // 查看更多（9枚）
         const num = /\d+/.exec(more)
-        console.log('num', num, id)
         const count = parseInt(num[0], 10)
         for (let i = 0; i < count; i++) {
           // https://www.pixiv.net/member_illust.php?mode=manga_big&illust_id=66969792&page=0
@@ -242,7 +283,7 @@ class Pixiv {
         const pageSize = await this.getPageSize(STAR_URL)
         for (let i = 1; i <= pageSize; i++) {
           console.log(`--------开始下载第${i}页--------`)
-          const url = i === 1 ? STAR_URL : `${STAR_URL}&p=${i}`
+          const url = `${STAR_URL}&p=${i}`
           const imgList = await this.getImgList(url)
           await Promise.map(imgList, (img) => this.download(img), { concurrency: 5 })
         }
@@ -251,18 +292,20 @@ class Pixiv {
         // 下载作者列表
         for (const a of author) {
           console.log(`--------开始下载画师 ${a} 的作品--------`)
-          const defaultUrl = `${AUTHOR_URL}${a}&type=all`
-          const pageSize = await this.getPageSize(defaultUrl)
-          for (let i = 1; i <= pageSize; i++) {
-            console.log(`--------开始下载第${i}页--------`)
-            const url = i === 1 ? defaultUrl : `${defaultUrl}&p=${i}`
-            const imgList = await this.getImgList(url)
-            await Promise.map(imgList, (img) => this.download(img), { concurrency: 5 })
-          }
+          await this.downloadByAuthor(a)
         }
         console.log('作者列表下载完成 o(*￣▽￣*)ブ')
       } else if (this.mode === 'follow') {
         // TODO: 我关注的作者
+        const pageSize = await this.getPageSize(`${FOLLOW_URL}1`)
+        for (let i = 1; i <= pageSize; i++) {
+          const defaultUrl = `${FOLLOW_URL}${i}`
+          const authorList = await this.getAuthorList(defaultUrl)
+          for (const a of authorList) {
+            console.log(`--------开始下载画师 ${a} 的作品--------`)
+            await this.downloadByAuthor(a)
+          }
+        }
       }
     })
   }
