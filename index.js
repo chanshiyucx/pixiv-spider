@@ -5,7 +5,12 @@ const Promise = require('bluebird')
 const querystring = require('querystring')
 
 const config = require('./config')
-const { username, password, mode, author, tags, rated } = config
+const { username, password, mode, author, tags, rated, date } = config
+
+// 限制日期
+const temp = date.split('/')
+const limitDate = new Date()
+limitDate.setFullYear(+temp[0], +temp[1] - 1, +temp[2])
 
 // 地址真是多得记不住啊 /(ㄒoㄒ)/~~
 const LOGIN_URL = 'https://accounts.pixiv.net/login?lang=zh&source=pc&view_type=page&ref=wwwtop_accounts_index'
@@ -21,6 +26,9 @@ class Pixiv {
   constructor () {
     this.mode = mode
     this.cookie = ''
+    this.history = []
+    this.author = ''
+    this.outDate = false
   }
 
   // 获取登陆 key
@@ -98,7 +106,7 @@ class Pixiv {
   }
 
   // 获取画师列表
-  async getAuthorList (url) {
+  async getAuthor (url) {
     try {
       const res = await axios({
         method: 'get',
@@ -111,12 +119,33 @@ class Pixiv {
       })
       const $ = cheerio.load(res.data)
       const members = $('.members').find('li')
-      let authorList = []
+      let author = []
       members.each(function () {
-        const author = $(this).find('input').val()
-        authorList.push(author)
+        const user = $(this).find('input').val()
+        author.push(user)
       })
-      return authorList
+      return author
+    } catch (err) {
+      console.log(err)
+    }
+  }
+
+  // 遍历画师列表下载
+  async downloadByAuthorList (authorList) {
+    try {
+      for (const a of authorList) {
+        console.log(`\n--------开始下载画师 ${a} 的作品--------`)
+        this.history = [] // 管理下载记录，避免重复下载
+        this.author = a // 当前下载的作者，保存路径
+        this.outDate = false
+        // 判断是否存在该作者的目录
+        const authorPath = `download/${a}`
+        if (!fs.existsSync(authorPath)) {
+          fs.mkdirSync(authorPath)
+        }
+        await this.downloadByAuthor(a)
+      }
+      console.log('\n作者列表下载完成 o(*￣▽￣*)ブ')
     } catch (err) {
       console.log(err)
     }
@@ -125,20 +154,27 @@ class Pixiv {
   // 按画师下载
   async downloadByAuthor (author) {
     try {
-      const defaultUrl = `${AUTHOR_URL}${author}&type=all`
-      const pageSize = await this.getPageSize(defaultUrl)
-      for (let i = 1; i <= pageSize; i++) {
-        console.log(`--------开始下载第${i}页--------`)
-        const url = `${defaultUrl}&p=${i}`
-        const imgList = await this.getImgList(url)
-        await Promise.map(imgList, (img) => this.download(img), { concurrency: 5 })
+      // tags 需要遍历
+      if (!tags.length) tags[0] = ''
+      for (const tag of tags) {
+        const defaultUrl = `${AUTHOR_URL}${author}&type=all${tag ? '&tag=' + encodeURI(tag) : ''}`
+        const pageSize = await this.getPageSize(defaultUrl)
+        for (let i = 1; i <= pageSize; i++) {
+          if (this.outDate) continue // 如果超出了期限，后面无需遍历了，开始下一个作者
+          console.log(`--------开始下载第${i}页--------`)
+          const url = `${defaultUrl}&p=${i}`
+          const imgList = await this.getImgList(url)
+          const length = imgList.length
+          console.log(`${length ? '找到 ' + length + ' 个作品 ♪(^∇^*)' : '没有找到符合条件的作品 /(ㄒoㄒ)/~~'}`)
+          await Promise.map(imgList, (img) => this.download(img), { concurrency: 5 })
+        }
       }
     } catch (err) {
       console.log(err)
     }
   }
 
-  // 获取单页收藏夹
+  // 获取整页作品
   async getImgList (url) {
     try {
       const res = await axios({
@@ -158,16 +194,28 @@ class Pixiv {
       if (this.mode !== 'star') {
         author = $('.user-name').text()
       }
+      const self = this // 哎，老办法
       list.each(function () {
         const id = $(this).find('img').attr('data-id')
         const name = $(this).find('.title').text()
         author = author || $(this).find('.user').text()
+        // 日期限制，从小图链接提取日期
+        const src = $(this).find('img').attr('data-src')
+        const suffix = src.split('/img-master/img/')[1]
+        const publishedAt = (suffix.slice(0, 10)).split('/') // 2016/01/26
         const img = {
           id,
           name,
           author
         }
-        imgList.push(img)
+        const imgDate = new Date()
+        // 表示月份的参数介于 0 到 11 之间, 需要减 1
+        imgDate.setFullYear(+publishedAt[0], +publishedAt[1] - 1, +publishedAt[2])
+        if (imgDate < limitDate) {
+          self.outDate = true // 设置标记，不需要再遍历下一页了
+        } else {
+          imgList.push(img)
+        }
       })
       return imgList
     } catch (err) {
@@ -177,6 +225,8 @@ class Pixiv {
 
   // 整理单个收藏
   async download ({ id, name, author }) {
+    // 根据下载记录判断是否必要下载
+    if (this.mode !== 'star' && this.history.includes(id)) return
     try {
       const src = `${IMG_URL}${id}`
       const res = await axios({
@@ -221,7 +271,6 @@ class Pixiv {
   // 获取图集
   async manage ({ id, name, author, manageUrl }) {
     try {
-      // https://www.pixiv.net/member_illust.php?mode=manga&illust_id=66969792
       const Referer = `https://www.pixiv.net/member_illust.php?mode=manga&illust_id=${id}`
       const res = await axios({
         method: 'get',
@@ -247,7 +296,6 @@ class Pixiv {
       return
     }
     return new Promise((resolve, reject) => {
-      const fileName = imgUrl.substring(imgUrl.lastIndexOf('/') + 1)
       axios({
         method: 'get',
         url: imgUrl,
@@ -258,8 +306,12 @@ class Pixiv {
           'Cookie': this.cookie
         }
       }).then(res => {
-        res.data.pipe(fs.createWriteStream(`download/${fileName}`)).on('close', () => {
+        const fileName = imgUrl.substring(imgUrl.lastIndexOf('/') + 1)
+        const savePath = this.mode === 'star' ? `download/star/${fileName}` : `download/${this.author || 'default'}/${fileName}`
+        res.data.pipe(fs.createWriteStream(savePath)).on('close', () => {
           console.log(`下载完成: 文件: ${fileName}    作品: ${name}    画师：${author}`)
+          // 下载完成保存，避免重复下载
+          if (this.mode !== 'star') this.history.push(id)
           resolve()
         })
       }).catch(err => reject(err))
@@ -268,46 +320,49 @@ class Pixiv {
 
   // 启动
   async start () {
-    fs.stat('cookie.txt', async (err, stat) => {
-      if (err) console.log('cookie 不存在，初次登陆获取 cookie', err)
-      // 获取 cookie
-      if (stat && stat.isFile()) {
-        this.cookie = fs.readFileSync('cookie.txt', 'utf8')
-      } else {
-        const key = await this.getKey()
-        this.cookie = await this.login(key)
+    console.log("\n程序启动(●'◡'●)  DesignedBy 蝉時雨")
+    let showTags = ''
+    tags.forEach(o => { showTags += ` ${o}` })
+    const inx = ['star', 'author', 'follow'].findIndex(o => o === mode)
+    const showMode = ['收藏夹模式', '作者列表模式', '关注者模式'][inx]
+    console.log(`当前模式：${showMode}  限定日期: ${date}  ${mode !== 'star' ? '筛选标签:' + showTags : ''}`)
+
+    // 如果不存在下载目录则新建
+    if (!fs.existsSync('download')) {
+      fs.mkdirSync('download')
+    }
+    // 如果不存在 cookie 则登陆获取
+    if (!fs.existsSync('cookie.txt')) {
+      const key = await this.getKey()
+      this.cookie = await this.login(key)
+    } else {
+      this.cookie = fs.readFileSync('cookie.txt', 'utf8')
+    }
+    if (this.mode === 'star') {
+      // 下载收藏夹
+      if (!fs.existsSync('download/star')) {
+        fs.mkdirSync('download/star')
       }
-      this.mode = mode
-      if (this.mode === 'star') {
-        // 下载收藏夹
-        const pageSize = await this.getPageSize(STAR_URL)
-        for (let i = 1; i <= pageSize; i++) {
-          console.log(`--------开始下载第${i}页--------`)
-          const url = `${STAR_URL}&p=${i}`
-          const imgList = await this.getImgList(url)
-          await Promise.map(imgList, (img) => this.download(img), { concurrency: 5 })
-        }
-        console.log('收藏夹下载完成 o(*￣▽￣*)ブ')
-      } else if (this.mode === 'author' && author.length) {
-        // 下载作者列表
-        for (const a of author) {
-          console.log(`--------开始下载画师 ${a} 的作品--------`)
-          await this.downloadByAuthor(a)
-        }
-        console.log('作者列表下载完成 o(*￣▽￣*)ブ')
-      } else if (this.mode === 'follow') {
-        // TODO: 我关注的作者
-        const pageSize = await this.getPageSize(`${FOLLOW_URL}1`)
-        for (let i = 1; i <= pageSize; i++) {
-          const defaultUrl = `${FOLLOW_URL}${i}`
-          const authorList = await this.getAuthorList(defaultUrl)
-          for (const a of authorList) {
-            console.log(`--------开始下载画师 ${a} 的作品--------`)
-            await this.downloadByAuthor(a)
-          }
-        }
+      const pageSize = await this.getPageSize(STAR_URL)
+      for (let i = 1; i <= pageSize; i++) {
+        if (this.outDate) return
+        console.log(`--------开始下载第${i}页--------`)
+        const url = `${STAR_URL}&p=${i}`
+        const imgList = await this.getImgList(url)
+        await Promise.map(imgList, (img) => this.download(img), { concurrency: 5 })
       }
-    })
+      console.log('\n收藏夹下载完成 o(*￣▽￣*)ブ')
+    } else if (this.mode === 'author' && author.length) {
+      await this.downloadByAuthorList(author)
+    } else if (this.mode === 'follow') {
+      // 下载已关注的作者作品
+      const pageSize = await this.getPageSize(`${FOLLOW_URL}1`)
+      for (let i = 1; i <= pageSize; i++) {
+        const defaultUrl = `${FOLLOW_URL}${i}`
+        const author = await this.getAuthor(defaultUrl)
+        await this.downloadByAuthorList(author)
+      }
+    }
   }
 }
 
