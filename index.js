@@ -5,10 +5,10 @@ const Promise = require('bluebird')
 const querystring = require('querystring')
 
 const config = require('./config')
-const { username, password, mode, author, tags, rated, date } = config
+const { username, password, mode, author, tags, rated, date, R18 } = config
 
 // 限制日期
-const temp = date.split('/')
+const temp = (date || '2000/01/01').split('/')
 const limitDate = new Date()
 limitDate.setFullYear(+temp[0], +temp[1] - 1, +temp[2])
 
@@ -138,14 +138,8 @@ class Pixiv {
         this.history = [] // 管理下载记录，避免重复下载
         this.author = a // 当前下载的作者，保存路径
         this.outDate = false
-        // 判断是否存在该作者的目录
-        const authorPath = `download/${a}`
-        if (!fs.existsSync(authorPath)) {
-          fs.mkdirSync(authorPath)
-        }
         await this.downloadByAuthor(a)
       }
-      console.log('\n作者列表下载完成 o(*￣▽￣*)ブ')
     } catch (err) {
       console.log(err)
     }
@@ -239,6 +233,17 @@ class Pixiv {
         }
       })
       const $ = cheerio.load(res.data)
+      // R18 的禁用开关
+      if (R18) {
+        const tags = $('.tags-container .tags').find('.text').filter(function (i, el) {
+          return $(this).text() === 'R-18'
+        })
+        if (tags && tags.length) {
+          console.log('删除r18作品')
+          return
+        }
+      }
+
       // 收藏夹不筛选，其他模式需要筛选
       if (this.mode !== 'star' && rated) {
         const ratedCount = parseInt($('.rated-count').text(), 10)
@@ -306,6 +311,14 @@ class Pixiv {
           'Cookie': this.cookie
         }
       }).then(res => {
+        if (!this.history.length && this.mode !== 'star') {
+          // 判断是否存在该作者的目录
+          const authorPath = `download/${this.author}`
+          if (!fs.existsSync(authorPath)) {
+            fs.mkdirSync(authorPath)
+          }
+        }
+
         const fileName = imgUrl.substring(imgUrl.lastIndexOf('/') + 1)
         const savePath = this.mode === 'star' ? `download/star/${fileName}` : `download/${this.author || 'default'}/${fileName}`
         res.data.pipe(fs.createWriteStream(savePath)).on('close', () => {
@@ -354,6 +367,7 @@ class Pixiv {
       console.log('\n收藏夹下载完成 o(*￣▽￣*)ブ')
     } else if (this.mode === 'author' && author.length) {
       await this.downloadByAuthorList(author)
+      console.log('\n作者列表下载完成 o(*￣▽￣*)ブ')
     } else if (this.mode === 'follow') {
       // 下载已关注的作者作品
       const pageSize = await this.getPageSize(`${FOLLOW_URL}1`)
@@ -361,6 +375,7 @@ class Pixiv {
         const defaultUrl = `${FOLLOW_URL}${i}`
         const author = await this.getAuthor(defaultUrl)
         await this.downloadByAuthorList(author)
+        console.log('\n关注作者下载完成 o(*￣▽￣*)ブ')
       }
     }
   }
