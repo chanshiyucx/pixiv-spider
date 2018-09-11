@@ -5,7 +5,7 @@ const Promise = require('bluebird')
 const querystring = require('querystring')
 
 const config = require('./config')
-const { username, password, mode, author, tags, rated, date, R18 } = config
+const { username, password, mode, author, tags, rated, date } = config
 
 // 限制日期
 const temp = (date || '2000/01/01').split('/')
@@ -75,6 +75,7 @@ class Pixiv {
           return_to: 'https://www.pixiv.net/'
         })
       })
+      console.log('Login success!')
       const cookie = res.headers['set-cookie'].join('; ')
       // 将 cookie 写入文件
       fs.writeFileSync('cookie.txt', cookie)
@@ -232,67 +233,35 @@ class Pixiv {
           'Cookie': this.cookie
         }
       })
-      const $ = cheerio.load(res.data)
-      // R18 的禁用开关
-      if (R18) {
-        const tags = $('.tags-container .tags').find('.text').filter(function (i, el) {
-          return $(this).text() === 'R-18'
-        })
-        if (tags && tags.length) {
-          console.log('删除r18作品')
-          return
-        }
-      }
-
-      // 收藏夹不筛选，其他模式需要筛选
-      if (this.mode !== 'star' && rated) {
-        const ratedCount = parseInt($('.rated-count').text(), 10)
-        if (ratedCount < rated) return
-      }
-      const readMore = $('.works_display').find('.read-more')
-      // imgUrl ---> https://i.pximg.net/c/600x600/img-master/img/2018/01/26/00/00/47/66965496_p0_master1200.jpg
-      // origin ---> https://i.pximg.net/img-original/img/2018/01/26/00/00/47/66965496_p0.png
-      if (!readMore.length) {
-        // 不是图集，直接获取高清图
-        const modal = $('._illust_modal')
-        const imgUrl = modal.find('img').attr('data-src')
-        await this.downloadImg({ id, name, author, imgUrl })
-      } else {
-        // 是图集，获取所有图片链接
-        const more = readMore.text() // 查看更多（9枚）
-        const num = /\d+/.exec(more)
-        const count = parseInt(num[0], 10)
-        for (let i = 0; i < count; i++) {
-          // https://www.pixiv.net/member_illust.php?mode=manga_big&illust_id=66969792&page=0
-          const manageUrl = `${MANAGE_URL}${id}&page=${i}`
-          await this.manage({ id, name, author, manageUrl })
-        }
-      }
+      // P站改版后动态渲染页面，需要找更好的方法获取图片链接
+      const rootSrc = res.data.split(`"original":"`)[1].split(`"},"tags":`)[0]
+      const imgUrl = rootSrc.replace(/(\\r)/g, " ").replace(/\\/g, "")
+      await this.downloadImg({ id, name, author, imgUrl })
     } catch (err) {
       console.log(err)
     }
   }
 
   // 获取图集
-  async manage ({ id, name, author, manageUrl }) {
-    try {
-      const Referer = `https://www.pixiv.net/member_illust.php?mode=manga&illust_id=${id}`
-      const res = await axios({
-        method: 'get',
-        url: manageUrl,
-        headers: {
-          'User-Agent': USER_AGENT,
-          'Referer': Referer,
-          'Cookie': this.cookie
-        }
-      })
-      const $ = cheerio.load(res.data)
-      const imgUrl = $('img').attr('src')
-      await this.downloadImg({ id, name, author, imgUrl })
-    } catch (err) {
-      console.log(err)
-    }
-  }
+  // async manage ({ id, name, author, manageUrl }) {
+  //   try {
+  //     const Referer = `https://www.pixiv.net/member_illust.php?mode=manga&illust_id=${id}`
+  //     const res = await axios({
+  //       method: 'get',
+  //       url: manageUrl,
+  //       headers: {
+  //         'User-Agent': USER_AGENT,
+  //         'Referer': Referer,
+  //         'Cookie': this.cookie
+  //       }
+  //     })
+  //     const $ = cheerio.load(res.data)
+  //     const imgUrl = $('img').attr('src')
+  //     await this.downloadImg({ id, name, author, imgUrl })
+  //   } catch (err) {
+  //     console.log(err)
+  //   }
+  // }
 
   // 下载图片
   async downloadImg ({ id, name, author, imgUrl }) {

@@ -7,5 +7,4 @@ module.exports = {
   author: [], // 下载的作者列表
   tags: [], // 筛选标签
   rated: 0, // 最低点赞数筛选
-  R18: true // 是否禁止 R18
 }
