@@ -1,6 +1,4 @@
 module.exports = {
-  username: '你的 P 站账号',
-  password: '你的 P 站密码',
   mode: 'author', // star: 下载收藏夹, author: 下载作者列表, follow: 下载我关注的作者
   date: '', // 限定日期之内, 可以留空, 注意格式: '2018/01/01'
   // 以下是 mode 为 author 或 follow 才有的选项

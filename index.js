@@ -1,11 +1,12 @@
 const fs = require('fs')
+const readline = require('readline')
 const axios = require('axios')
 const cheerio = require('cheerio')
 const Promise = require('bluebird')
 const querystring = require('querystring')
 
 const config = require('./config')
-const { username, password, mode, author, tags, rated, date } = config
+const { mode, author, tags, rated, date } = config
 
 // 限制日期
 const temp = (date || '2000/01/01').split('/')
@@ -23,7 +24,9 @@ const FOLLOW_URL = 'https://www.pixiv.net/bookmark.php?type=user&rest=show&p='
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36'
 
 class Pixiv {
-  constructor () {
+  constructor() {
+    this.username = ''
+    this.password = ''
     this.mode = mode
     this.cookie = ''
     this.history = []
@@ -31,8 +34,35 @@ class Pixiv {
     this.outDate = false
   }
 
+  // 输入账户信息
+  async inputUser() {
+    return new Promise(resolve => {
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      })
+      rl.setPrompt('请输入P站账户> ')
+      rl.prompt()
+      rl.on('line', line => {
+        if (!line.trim().length) {
+          rl.prompt()
+        } else if (!this.username) {
+          this.username = line.trim()
+          console.log('username:', this.username)
+          rl.setPrompt('请输入账户密码> ')
+          rl.prompt()
+        } else if (!this.password) {
+          this.password = line.trim()
+          console.log('password:', this.password)
+          rl.close()
+          resolve()
+        }
+      })
+    }).catch(err => console.log(err))
+  }
+
   // 获取登陆 key
-  async getKey () {
+  async getKey() {
     try {
       const res = await axios({
         method: 'get',
@@ -51,7 +81,7 @@ class Pixiv {
   }
 
   // 登陆
-  async login ({ postKey, postCookie }) {
+  async login({ postKey, postCookie }) {
     try {
       const res = await axios({
         method: 'post',
@@ -65,8 +95,8 @@ class Pixiv {
           'Cookie': postCookie
         },
         data: querystring.stringify({
-          pixiv_id: username,
-          password: password,
+          pixiv_id: this.username,
+          password: this.password,
           captcha: '',
           g_recaptcha_response: '',
           post_key: postKey,
@@ -77,7 +107,6 @@ class Pixiv {
       })
       console.log('Login success!')
       const cookie = res.headers['set-cookie'].join('; ')
-      // 将 cookie 写入文件
       fs.writeFileSync('cookie.txt', cookie)
       return cookie
     } catch (err) {
@@ -86,7 +115,7 @@ class Pixiv {
   }
 
   // 获取总页数
-  async getPageSize (url) {
+  async getPageSize(url) {
     try {
       const res = await axios({
         method: 'get',
@@ -107,7 +136,7 @@ class Pixiv {
   }
 
   // 获取画师列表
-  async getAuthor (url) {
+  async getAuthor(url) {
     try {
       const res = await axios({
         method: 'get',
@@ -132,7 +161,7 @@ class Pixiv {
   }
 
   // 遍历画师列表下载
-  async downloadByAuthorList (authorList) {
+  async downloadByAuthorList(authorList) {
     try {
       for (const a of authorList) {
         console.log(`\n--------开始下载画师 ${a} 的作品--------`)
@@ -147,7 +176,7 @@ class Pixiv {
   }
 
   // 按画师下载
-  async downloadByAuthor (author) {
+  async downloadByAuthor(author) {
     try {
       // tags 需要遍历
       if (!tags.length) tags[0] = ''
@@ -170,7 +199,7 @@ class Pixiv {
   }
 
   // 获取整页作品
-  async getImgList (url) {
+  async getImgList(url) {
     try {
       const res = await axios({
         method: 'get',
@@ -219,7 +248,7 @@ class Pixiv {
   }
 
   // 整理单个收藏
-  async download ({ id, name, author }) {
+  async download({ id, name, author }) {
     // 根据下载记录判断是否必要下载
     if (this.mode !== 'star' && this.history.includes(id)) return
     try {
@@ -242,29 +271,8 @@ class Pixiv {
     }
   }
 
-  // 获取图集
-  // async manage ({ id, name, author, manageUrl }) {
-  //   try {
-  //     const Referer = `https://www.pixiv.net/member_illust.php?mode=manga&illust_id=${id}`
-  //     const res = await axios({
-  //       method: 'get',
-  //       url: manageUrl,
-  //       headers: {
-  //         'User-Agent': USER_AGENT,
-  //         'Referer': Referer,
-  //         'Cookie': this.cookie
-  //       }
-  //     })
-  //     const $ = cheerio.load(res.data)
-  //     const imgUrl = $('img').attr('src')
-  //     await this.downloadImg({ id, name, author, imgUrl })
-  //   } catch (err) {
-  //     console.log(err)
-  //   }
-  // }
-
   // 下载图片
-  async downloadImg ({ id, name, author, imgUrl }) {
+  async downloadImg({ id, name, author, imgUrl }) {
     if (!imgUrl) {
       console.log(`图片 ${id} 解析错误，请检查知悉！`)
       return
@@ -301,8 +309,9 @@ class Pixiv {
   }
 
   // 启动
-  async start () {
+  async start() {
     console.log("\n程序启动(●'◡'●)  DesignedBy 蝉時雨")
+    await this.inputUser()
     let showTags = ''
     tags.forEach(o => { showTags += ` ${o}` })
     const inx = ['star', 'author', 'follow'].findIndex(o => o === mode)
