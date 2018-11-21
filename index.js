@@ -44,16 +44,15 @@ class Pixiv {
       rl.setPrompt('请输入P站账户> ')
       rl.prompt()
       rl.on('line', line => {
-        if (!line.trim().length) {
+        const input = line.trim()
+        if (!input.length) {
           rl.prompt()
         } else if (!this.username) {
-          this.username = line.trim()
-          console.log('username:', this.username)
+          this.username = input
           rl.setPrompt('请输入账户密码> ')
           rl.prompt()
         } else if (!this.password) {
-          this.password = line.trim()
-          console.log('password:', this.password)
+          this.password = input
           rl.close()
           resolve()
         }
